@@ -21,7 +21,7 @@ class MicrophoneStream(object):
         self._buff = queue.Queue()
         self.closed = True
         self._last_sound_time = time.time() + 2  # 最後に音声が検出された時刻。最初だけ余裕を持たせるために+2秒
-        self._silent_duration_limit = 2  # 無音とみなす時間の上限（秒）
+        self._silent_duration_limit = 1.0  # 無音とみなす時間の上限（秒）
         self._base_amplitude = -1
 
     def __enter__(self):
@@ -44,6 +44,7 @@ class MicrophoneStream(object):
         self.closed = True
         self._buff.put(None)
         self._audio_interface.terminate()
+        print("[STT] ストリームが終了しました")
 
     def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
         """バッファにオーディオデータを追加するコールバック関数です。"""
@@ -51,7 +52,7 @@ class MicrophoneStream(object):
         # 振幅が閾値以上であれば、最後に音声が検出された時刻を更新
         amplitude = self._get_amplitude(in_data)
 
-        # ベースの閾値が設定されていないなら今の音量で取る
+        # ベースの閾値が設定されていないなら今の音量のn倍で取る
         if self._base_amplitude == -1:
             self._base_amplitude = amplitude * 1.5
 
@@ -84,16 +85,13 @@ class MicrophoneStream(object):
             yield b''.join(data)
 
     def start_silence_detector(self):
-        print("処理開始")
+        print("[STT] 音声読み取り処理開始")
         """無音検出スレッドを開始します。"""
         def detect_silence():
             while not self.closed:
-                print("checking", self._last_sound_time)
                 if time.time() - self._last_sound_time > self._silent_duration_limit:
-                    print("無音状態が続いたため、処理を終了します。")
+                    print("[STT] 無音状態が続いたため、処理を終了します。")
                     self.closed = True  # ストリームを閉じることで処理を終了
-                    # ストリームのクリーンアップ
-                    self.__exit__(None, None, None)
                     break
                 time.sleep(0.5)  # CPU使用率を抑えるためにスリープ
 
@@ -102,6 +100,7 @@ class MicrophoneStream(object):
 
 def listen_print_loop(responses):
     """サーバーからのレスポンスを処理する関数です。一定時間音声が検出されない場合に終了します。"""
+    final_result = ""
 
     for response in responses:
         if not response.results:
@@ -111,31 +110,37 @@ def listen_print_loop(responses):
         if not result.alternatives:
             continue
         
-        print(u'Transcript: {}'.format(result.alternatives[0].transcript))
+        print((result.alternatives[0].transcript))
+        final_result = result.alternatives[0].transcript
 
-def main():
-    # GCPクライアントライブラリを初期化
-    client = speech.SpeechClient()
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        sample_rate_hertz=RATE,
-        language_code='ja-JP',
-        max_alternatives=1,
-    )
-    streaming_config = speech.StreamingRecognitionConfig(
-        config=config,
-        interim_results=True,
-    )
+    return final_result
 
-    with MicrophoneStream(RATE, CHUNK) as stream:
-        audio_generator = stream.generator()
-        requests = (speech.StreamingRecognizeRequest(audio_content=content)
-                    for content in audio_generator)
 
-        responses = client.streaming_recognize(streaming_config, requests)
+client = speech.SpeechClient()
+config = speech.RecognitionConfig(
+    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+    sample_rate_hertz=RATE,
+    language_code='ja-JP',
+    max_alternatives=1,
+)
+streaming_config = speech.StreamingRecognitionConfig(
+    config=config,
+    interim_results=True,
+)
 
-        # レスポンスを処理
-        listen_print_loop(responses)
+# 本体
+def generate_transcription():
+  with MicrophoneStream(RATE, CHUNK) as stream:
+      audio_generator = stream.generator()
+      requests = (speech.StreamingRecognizeRequest(audio_content=content)
+                  for content in audio_generator)
 
-if __name__ == '__main__':
-    main()
+      responses = client.streaming_recognize(streaming_config, requests)
+
+      # レスポンスを処理
+      result = listen_print_loop(responses)
+      print("最終結果:",result)
+      return result
+
+if __name__ == "__main__":
+    generate_transcription()

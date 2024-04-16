@@ -1,6 +1,6 @@
 import requests
 import json
-from soundplayer import play_mp3_from_binary, init_pygame, quit_pygame
+from soundplayer import play_mp3_from_binary, quit_pygame
 from dotenv import load_dotenv
 import os
 
@@ -14,8 +14,6 @@ def stream_voice_chat(payload):
     if response.status_code != 200:
         print("Error:", response.text)
         return
-
-    init_pygame()
     
     # レスポンスからチャンク単位でデータを受け取り、処理する
     try:
